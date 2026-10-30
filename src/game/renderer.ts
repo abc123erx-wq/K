@@ -349,7 +349,13 @@ export class Renderer {
       return {
         sx: width / 2 + lateral * scale,
         // Ground point of a world coordinate at the given depth.
-        sy: horizon + this.fp.eyeHeight * TILE * scale,
+        //
+        // `scale` already converts WORLD UNITS to pixels
+        // (focal is px per world-unit at depth 1), so the eye height
+        // must be expressed in world units — multiplying by TILE here
+        // would mix two unit systems and push the ground far below
+        // the viewport, leaving the screen empty.
+        sy: horizon + this.fp.eyeHeight * scale,
         depth,
       };
     };
@@ -385,53 +391,118 @@ export class Renderer {
       return db - da; // far first
     });
 
-    // Draw the ground in bands from far to near.
-    for (let band = bandCount - 1; band >= 0; band--) {
-      const depth = maxDepth * (1 - band / bandCount);
-      const nextDepth = maxDepth * (1 - (band - 1) / bandCount);
-      if (depth <= 0.2) continue;
-      const scale = focal / depth;
-      const y = horizon + this.fp.eyeHeight * TILE * scale;
-      const nextScale = focal / Math.max(0.2, nextDepth);
-      const nextY = horizon + this.fp.eyeHeight * TILE * nextScale;
+    // ---- Sky ---------------------------------------------------------
+    // Without this the area above the horizon stays pure black, which
+    // reads as "the game is broken" rather than as an outdoor view.
+    this.drawFirstPersonSky(hour, horizon, width, height);
+
+    // Draw the ground in bands from FAR to NEAR (painter's algorithm:
+    // the closest band must be painted last so it covers the others).
+    //
+    // The bands use a geometric depth progression: with a linear one
+    // the far half of the world is squeezed into a couple of pixels
+    // and the near half covers the whole screen. A geometric series
+    // spends the same number of pixels on every distance, which is
+    // what makes the ground readable.
+    //
+    // Band 0 starts exactly at the horizon so the sky and the ground
+    // meet seamlessly (there is no black gap in between).
+    const minDepth = 0.35;
+    const depthRatio = Math.pow(maxDepth / minDepth, 1 / bandCount);
+
+    for (let band = 0; band < bandCount; band++) {
+      // Far edge of the band (farther away => smaller depth).
+      const farDepth = maxDepth / Math.pow(depthRatio, band);
+      // Near edge of the band (closer => larger depth).
+      const nearDepth = maxDepth / Math.pow(depthRatio, band + 1);
+      if (nearDepth <= minDepth * 0.5) continue;
+
+      const scale = focal / nearDepth;      // px per world unit at the near edge
+
+      // Screen Y of the ground at the near edge (lower on the screen).
+      const y = horizon + this.fp.eyeHeight * scale;
+      // Screen Y at the far edge (higher on the screen). For the
+      // farthest band this is the horizon itself.
+      const nextY = band === 0
+        ? horizon
+        : horizon + this.fp.eyeHeight * (focal / farDepth);
+      if (nextY > y) continue;
       const bandHeight = Math.max(1, y - nextY);
 
-      // Sample a horizontal strip of tiles perpendicular to the view.
-      const halfWidth = (width / 2) / scale + TILE;
-      const stripCenterX = camX + dirX * depth;
-      const stripCenterY = camY + dirY * depth;
-      const sampleCount = Math.max(6, Math.min(64, Math.round(width / 14)));
-      const step = (halfWidth * 2) / sampleCount;
+      // ---- Per-column inverse projection ----------------------------
+      // For every screen column we compute the exact world position it
+      // looks at (inverse of the perspective projection) and read the
+      // tile there. A fixed grid of samples would smear a single tile
+      // across many columns, which produced vertical stripes in the
+      // distance.
+      const bandDepth = Math.max(0.01, nearDepth - farDepth);
+      // A far band covers many pixels but corresponds to a thin slice
+      // of the world; sampling several rows and keeping the closest hit
+      // keeps the distant ground stable (same idea as a mipmap).
+      const rowSamples = bandDepth > 1.2 ? 3 : bandDepth > 0.5 ? 2 : 1;
 
-      for (let s = 0; s < sampleCount; s++) {
-        const lateral = -halfWidth + step * (s + 0.5);
-        const wx = stripCenterX + rightX * lateral;
-        const wy = stripCenterY + rightY * lateral;
-        if (!world.inBounds(Math.floor(wx), Math.floor(wy))) continue;
-        const tile = world.tileAt(wx, wy);
-        const color = this.firstPersonTileColor(tile);
-        ctx.fillStyle = color;
-        ctx.fillRect((s * width) / sampleCount, nextY, width / sampleCount + 1, bandHeight + 1);
-      }
+      // The tile lookup is cached per world tile so that neighbouring
+      // columns pointing at the same tile do not repeat the lookup.
+      let lastTileKey = "";
+      let lastColor = "";
 
-      // Actors whose feet fall inside this depth band.
-      for (const actor of actors) {
-        const d = (actor.x - camX) * dirX + (actor.y - camY) * dirY;
-        if (d > nextDepth || d <= depth) continue;
-        const p = project(actor.x, actor.y);
-        if (p.sx < -300 || p.sx > width + 300) continue;
-        // A humanoid is ~1.7 tiles tall; project that onto the screen.
-        const actorScale = focal / d;
-        const actorHeightPx = 1.7 * TILE * actorScale;
-        ctx.save();
-        ctx.translate(p.sx, p.sy);
-        if (actor.kind === "zombie") {
-          this.drawFirstPersonZombie(actor.ref, actorHeightPx);
-        } else {
-          this.drawFirstPersonOtherPlayer(actor.ref, actorHeightPx);
+      for (let x = 0; x < width; x++) {
+        // Lateral offset (in world units) seen by this screen column.
+        const lateral = (x - width / 2) / scale;
+        let color: string | null = null;
+
+        for (let r = 0; r < rowSamples && color === null; r++) {
+          // Sample from the near edge of the band backwards.
+          const rowDepth = nearDepth - (bandDepth * (r + 0.5)) / rowSamples;
+          const wx = camX + dirX * rowDepth + rightX * lateral;
+          const wy = camY + dirY * rowDepth + rightY * lateral;
+          const tx = Math.floor(wx);
+          const ty = Math.floor(wy);
+          if (!world.inBounds(tx, ty)) continue;
+
+          const key = `${tx},${ty}`;
+          if (key === lastTileKey) {
+            color = lastColor;
+            continue;
+          }
+          const tile = world.tileAt(wx, wy);
+          color = this.firstPersonTileColor(tile);
+          lastTileKey = key;
+          lastColor = color;
         }
-        ctx.restore();
+
+        if (!color) continue;
+        ctx.fillStyle = color;
+        // Overlap by one pixel so consecutive bands do not leave
+        // hairline seams where the fillRect rounding falls short.
+        ctx.fillRect(x, nextY - 1, 1, bandHeight + 2);
       }
+
+    }
+
+    // ---- Actors --------------------------------------------------------
+    // The actors are drawn AFTER the terrain (not inside the band loop)
+    // so that an actor standing exactly on a band border is never
+    // skipped. They are sorted far -> near, so the closest one is
+    // painted last and correctly overlaps the ones behind it.
+    for (const actor of actors) {
+      const d = (actor.x - camX) * dirX + (actor.y - camY) * dirY;
+      if (d <= 0.12) continue;
+      const p = project(actor.x, actor.y);
+      if (p.sx < -300 || p.sx > width + 300) continue;
+      // A humanoid is ~1.7 world units tall; `actorScale` already
+      // converts world units to pixels, so TILE must NOT be applied
+      // here (that would mix unit systems and blow the sprite up).
+      const actorScale = focal / d;
+      const actorHeightPx = 1.7 * actorScale;
+      ctx.save();
+      ctx.translate(p.sx, p.sy);
+      if (actor.kind === "zombie") {
+        this.drawFirstPersonZombie(actor.ref, actorHeightPx);
+      } else {
+        this.drawFirstPersonOtherPlayer(actor.ref, actorHeightPx);
+      }
+      ctx.restore();
     }
     ctx.filter = "none";
     ctx.restore();
@@ -452,21 +523,85 @@ export class Renderer {
     this.drawFirstPersonCrosshair(player);
   }
 
+  /**
+   * Paints the sky above the horizon for the first-person view.
+   * The gradient follows the time of day so night stays dark and
+   * dawn/dusk keep a warm tone, matching the top-down lighting.
+   */
+  private drawFirstPersonSky(hour: number, horizon: number, width: number, height: number) {
+    const ctx = this.ctx;
+    const top = this.skyColor(hour, 0);
+    const bottom = this.skyColor(hour, 1);
+    const grad = ctx.createLinearGradient(0, 0, 0, Math.max(1, horizon));
+    grad.addColorStop(0, top);
+    grad.addColorStop(1, bottom);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, width, Math.max(0, horizon));
+
+    // A low sun/moon glow near the horizon line.
+    const glow = this.sunGlowColor(hour);
+    if (glow) {
+      const g2 = ctx.createLinearGradient(0, horizon - height * 0.22, 0, horizon);
+      g2.addColorStop(0, "rgba(0,0,0,0)");
+      g2.addColorStop(1, glow);
+      ctx.fillStyle = g2;
+      ctx.fillRect(0, horizon - height * 0.22, width, height * 0.22);
+    }
+  }
+
+  /** Sky gradient colour for a given time of day and stop (0 = top, 1 = horizon). */
+  private skyColor(hour: number, stop: number): string {
+    // 0 = midnight, 6 = dawn, 12 = noon, 18 = dusk, 24 = midnight.
+    const h = ((hour % 24) + 24) % 24;
+    let top: [number, number, number];
+    let bottom: [number, number, number];
+
+    if (h >= 20 || h < 5) {
+      top = [8, 10, 20];
+      bottom = [16, 18, 30];
+    } else if (h < 8) {
+      // dawn
+      top = [26, 32, 58];
+      bottom = [92, 62, 52];
+    } else if (h < 17) {
+      top = [46, 66, 96];
+      bottom = [128, 142, 152];
+    } else if (h < 20) {
+      // dusk
+      top = [34, 40, 66];
+      bottom = [110, 68, 48];
+    } else {
+      top = [10, 12, 24];
+      bottom = [18, 20, 32];
+    }
+
+    const lerp = (a: number, b: number) => Math.round(a + (b - a) * stop);
+    return `rgb(${lerp(top[0], bottom[0])},${lerp(top[1], bottom[1])},${lerp(top[2], bottom[2])})`;
+  }
+
+  /** Warm glow near the horizon during dawn/dusk, empty otherwise. */
+  private sunGlowColor(hour: number): string {
+    const h = ((hour % 24) + 24) % 24;
+    if (h >= 5 && h < 9) return "rgba(214, 142, 88, 0.35)";
+    if (h >= 16 && h < 20) return "rgba(206, 110, 66, 0.32)";
+    return "";
+  }
+
   /** Tile colour used by the first-person ground projection. */
   private firstPersonTileColor(tile: string): string {
     switch (tile) {
-      case "grass": return "#263321";
-      case "forest": return "#172417";
-      case "road": return "#242424";
-      case "house": return "#3a342b";
-      case "fence": return "#4d4032";
-      case "ruin": return "#2a2520";
-      case "water": return "#1a2535";
-      case "debris": return "#2d2d20";
-      case "rubble": return "#3a3028";
-      case "bunker": return "#202520";
-      case "park": return "#2a3828";
-      default: return "#20261f";
+      case "grass": return "#33422a";
+      case "forest": return "#1f2f1d";
+      case "road": return "#333333";
+      case "house": return "#4a4136";
+      case "fence": return "#5d4d3c";
+      case "ruin": return "#3a3229";
+      case "water": return "#223048";
+      case "debris": return "#3c3c2a";
+      case "rubble": return "#4c3f34";
+      case "bunker": return "#2b3129";
+      case "park": return "#374a34";
+      default: return "#2b3229";
     }
   }
 
@@ -490,11 +625,13 @@ export class Renderer {
     const variant = typeof zombie?.variant === "number" ? zombie.variant % 4 : 0;
     const w = Math.max(2, heightPx * 0.42);
     const h = Math.max(4, heightPx);
-    ctx.fillStyle = ["#2a2f26", "#2f2a26", "#262f2a", "#2a262f"][variant] ?? "#2a2f26";
+    // Same palette as the top-down view (zombieSkinColors) so the
+    // silhouette stays readable against the ground.
+    ctx.fillStyle = zombieSkinColors[variant] ?? "#7a8a6a";
     ctx.fillRect(-w / 2, -h, w, h);
-    ctx.fillStyle = ["#39412f", "#41392f", "#2f4139", "#393241"][variant] ?? "#39412f";
+    ctx.fillStyle = ["#4a5c45", "#54483c", "#3f5448", "#4b4553"][variant] ?? "#4a5c45";
     ctx.fillRect(-w / 2 - w * 0.12, -h * 0.62, w * 1.24, h * 0.62);
-    ctx.fillStyle = "#7a8a6a";
+    ctx.fillStyle = "#a3b48c";
     ctx.beginPath();
     ctx.ellipse(0, -h - h * 0.05, w * 0.34, h * 0.1, 0, 0, Math.PI * 2);
     ctx.fill();

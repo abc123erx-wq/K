@@ -14,9 +14,20 @@ interface MobileControlsProps {
   snapshot: GameSnapshot;
   panelOpen: boolean;
   onOpenPanel: (panel: "character" | "inventory" | "crafting" | "map") => void;
+  /** Whether the first-person camera is currently active. */
+  firstPersonEnabled?: boolean;
+  /** Toggle the first-person camera (mobile has no keyboard). */
+  onToggleFirstPerson?: () => void;
 }
 
-export default function MobileControls({ engineRef, snapshot, panelOpen, onOpenPanel }: MobileControlsProps) {
+export default function MobileControls({
+  engineRef,
+  snapshot,
+  panelOpen,
+  onOpenPanel,
+  firstPersonEnabled = false,
+  onToggleFirstPerson,
+}: MobileControlsProps) {
   const stickRef = useRef<HTMLDivElement | null>(null);
   const aimRef = useRef<HTMLDivElement | null>(null);
   const [stick, setStick] = useState({ x: 0, y: 0, active: false });
@@ -154,6 +165,17 @@ export default function MobileControls({ engineRef, snapshot, panelOpen, onOpenP
         <button onClick={() => { vibrate(); onOpenPanel("inventory"); }} className="border border-[#2a2a2a] bg-[#0d0d0d]/90 px-2 py-1.5 text-[#d7c9a7] backdrop-blur">
           🎒{Math.floor(snapshot.weight)}/{Math.floor(snapshot.capacity)}
         </button>
+        {onToggleFirstPerson && (
+          <button
+            onClick={() => { vibrate(); onToggleFirstPerson(); }}
+            title="Alternar câmera em primeira pessoa"
+            className={`border bg-[#0d0d0d]/90 px-2 py-1.5 backdrop-blur ${
+              firstPersonEnabled ? "border-[#d96b3a] text-[#d96b3a]" : "border-[#2a2a2a] text-zinc-400"
+            }`}
+          >
+            👁
+          </button>
+        )}
         <button onClick={() => { vibrate(); engineRef.current?.togglePause(); }} className="border border-[#2a2a2a] bg-[#0d0d0d]/90 px-2 py-1.5 text-zinc-400 backdrop-blur">
           {snapshot.paused ? "▶" : "⏸"}
         </button>

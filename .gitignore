@@ -21,3 +21,6 @@ coverage/
 # OS
 .DS_Store
 Thumbs.db
+
+# Snapshots visuais gerados pelos testes
+artifacts/

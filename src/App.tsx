@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GameEngine } from "./game/engine";
 import type { DeathReport, GameSnapshot, Item, SandboxOptions } from "./game/types";
 import AdminPanel from "./components/AdminPanel";
@@ -255,6 +255,27 @@ export default function App() {
     setPhase("playing");
   };
 
+  /**
+   * Toggle the first-person camera.
+   *
+   * Shared by the Settings button and the in-game shortcut (V), so
+   * both paths behave identically: persist, mirror into the save
+   * file and push to the running engine.
+   */
+  const toggleFirstPersonCamera = useCallback(() => {
+    const userId = currentUser?.id ?? null;
+    const next = toggleFirstPerson(userId, firstPerson);
+    setFirstPerson(next);
+    syncFirstPersonToSave(playerSave, next);
+    if (playerSave) Database.save(playerSave);
+    engineRef.current?.setFirstPerson({
+      enabled: next.enabled,
+      fov: next.fov,
+      sensitivity: next.sensitivity,
+      reduceMotion: next.reduceMotion || accessibility.reduceMotion,
+    });
+  }, [currentUser?.id, firstPerson, playerSave, accessibility.reduceMotion]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key.toLowerCase() === "i") {
@@ -272,10 +293,18 @@ export default function App() {
           setChatInput("");
         }
       }
+      // "V" alterna a câmera em primeira pessoa durante o jogo.
+      if (event.key.toLowerCase() === "v" && phase === "playing") {
+        const target = event.target as HTMLElement | null;
+        // Não dispara enquanto o jogador está a digitar.
+        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+        event.preventDefault();
+        toggleFirstPersonCamera();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [phase, chatInput]);
+  }, [phase, chatInput, toggleFirstPersonCamera]);
 
   useEffect(() => {
     chatRef.current?.scrollTo(0, chatRef.current.scrollHeight);
@@ -457,6 +486,7 @@ export default function App() {
                   <p><span className="text-[#d96b3a]">I / C</span> — Inventário / Crafting</p>
                   <p><span className="text-[#d96b3a]">1-5</span> — Usar hotbar</p>
                   <p><span className="text-[#d96b3a]">P</span> — Pausar</p>
+                  <p><span className="text-[#d96b3a]">V</span> — Alternar câmera em primeira pessoa</p>
                   <p className="col-span-2"><span className="text-[#d96b3a]">Mobile</span> — joystick, mira touch, Attack, F, E, Run e painel Bag/Craft.</p>
                   <p className="col-span-2"><span className="text-[#d96b3a]">Online</span> — abra 2 abas do navegador para ver outros jogadores no mapa! Use Enter para chat.</p>
                 </div>
@@ -516,19 +546,7 @@ export default function App() {
                   <div className="flex items-center gap-2">
                     <label className="text-sm uppercase tracking-widest text-zinc-500">Câmera</label>
                     <button
-                      onClick={() => {
-                        const userId = currentUser?.id ?? null;
-                        const next = toggleFirstPerson(userId, firstPerson);
-                        setFirstPerson(next);
-                        syncFirstPersonToSave(playerSave, next);
-                        if (playerSave) Database.save(playerSave);
-                        engineRef.current?.setFirstPerson({
-                          enabled: next.enabled,
-                          fov: next.fov,
-                          sensitivity: next.sensitivity,
-                          reduceMotion: next.reduceMotion,
-                        });
-                      }}
+                      onClick={toggleFirstPersonCamera}
                       className={`border px-4 py-2 text-sm font-bold uppercase tracking-widest ${firstPerson.enabled ? "border-[#d96b3a] bg-[#2a1714] text-[#d96b3a]" : "border-[#2a2a2a] text-zinc-400"}`}
                       title="Alterna entre a câmera atual e uma câmera em primeira pessoa. É uma opção visual e de controle — não altera as regras do jogo."
                     >
@@ -663,6 +681,15 @@ export default function App() {
       {/* ==================== GAME HUD ==================== */}
       {phase === "playing" && (
         <div className="pointer-events-none fixed inset-0">
+          {/* First-person indicator */}
+          {firstPerson.enabled && (
+            <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2">
+              <div className="border border-[#d96b3a]/60 bg-black/60 px-3 py-1 text-[9px] uppercase tracking-[0.3em] text-[#d96b3a]">
+                👁 Primeira pessoa · tecla V
+              </div>
+            </div>
+          )}
+
           {/* Moodles */}
           <div className="pointer-events-auto absolute left-4 top-4 flex flex-col gap-2">
             {snapshot.moodles.length === 0 && (
@@ -854,6 +881,17 @@ export default function App() {
                 <button onClick={() => engineRef.current?.togglePause()} className="border border-[#2a2a2a] px-3 py-2 uppercase tracking-widest text-zinc-300 hover:bg-[#1f2521]">
                   {snapshot.paused ? "▶ Resume" : "⏸ Pause"}
                 </button>
+                <button
+                  onClick={toggleFirstPersonCamera}
+                  title="Alterna a câmera em primeira pessoa (tecla V). É uma opção visual e de controle — não altera as regras do jogo."
+                  className={`border px-3 py-2 uppercase tracking-widest ${
+                    firstPerson.enabled
+                      ? "border-[#d96b3a] bg-[#2a1714] text-[#d96b3a]"
+                      : "border-[#2a2a2a] text-zinc-300 hover:bg-[#1f2521]"
+                  }`}
+                >
+                  {firstPerson.enabled ? "👁 1ª pessoa ON" : "👁 1ª pessoa OFF"}
+                </button>
                 <button onClick={() => setShowEncyclopedia(true)} className="border border-[#4a5c45] bg-[#1f2521] px-3 py-2 uppercase tracking-widest text-[#cdd7bf] hover:bg-[#2b352e]">
                   📖 Items
                 </button>
@@ -895,6 +933,8 @@ export default function App() {
               setActivePanel(panel);
               setMobilePanelOpen(true);
             }}
+            firstPersonEnabled={firstPerson.enabled}
+            onToggleFirstPerson={toggleFirstPersonCamera}
           />
 
           {/* Voice Chat with AI Moderation */}

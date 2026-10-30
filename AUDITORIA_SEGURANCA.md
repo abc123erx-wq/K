@@ -214,7 +214,8 @@ export function getAdminAccessCode(): string | null {
 }
 ```
 
-Verificado: o bundle `dist/index.html` **não contém** `vocedescobriu`,
+Verificado: o bundle `dist/index.html` **não contém** a senha de
+administrador,
 `RimuOfc`, `Guisdfas`, nem o antigo código de acesso do admin, nem a chave do Paddle.
 
 ---

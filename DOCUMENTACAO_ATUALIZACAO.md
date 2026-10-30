@@ -19,7 +19,7 @@
 | Câmera em primeira pessoa | `src/game/firstPerson.ts`, `src/game/renderer.ts`, `src/game/engine.ts` | Preferência por jogador, persistida; não altera regras |
 | Acessibilidade e segurança | `src/game/accessibility.ts` | Volume, legendas, reduzir flashes/movimento, desativar eventos |
 | Auditoria mínima | `server/auditLog.mjs` | Só evento, resultado, horário e id da conta — sem áudio |
-| Testes automatizados | `tests/` | 103 testes cobrindo autorização, frase, microfone, limites, spawn e FP |
+| Testes automatizados | `tests/` | 161 testes cobrindo autorização, frase, microfone, limites, spawn e FP (inclui snapshot visual) |
 
 ---
 
@@ -214,6 +214,63 @@ permissão nenhuma.
 
 ## 8. Câmera em primeira pessoa
 
+### 8.1 Correção da projeção (o bug "a primeira pessoa n ta funcionando")
+
+A primeira pessoa **não desenhava o mundo**. O motivo era uma mistura de
+dois sistemas de unidades dentro de `src/game/renderer.ts`:
+
+```ts
+// scale = focal / depth  →  JÁ É pixels por unidade de mundo
+const scale = focal / depth;
+// ERRADO: multiplicava a altura dos olhos por TILE (42 px por unidade
+// no modo de cima) — o chão era projetado 42x longe demais.
+const sy = horizon + this.fp.eyeHeight * TILE * scale;
+```
+
+Com `focal ≈ 836`, `eyeHeight = 1.05` e `TILE = 42`, o chão caía entre
+**y ≈ 1 755 e y ≈ 31 495** numa tela de 720 px: **nenhuma** das 112 640
+faixas de terreno caía dentro da tela e o jogador viaia apenas o fundo
+preto e a mira.
+
+**Correção aplicada (4 pontos):**
+
+```ts
+// projeção do chão
+sy:    horizon + this.fp.eyeHeight * scale,
+y:     horizon + this.fp.eyeHeight * scale,
+nextY: horizon + this.fp.eyeHeight * nextScale,
+// altura do personagem
+const actorHeightPx = 1.7 * actorScale;   // 1.7 unidades de mundo
+```
+
+Além disso foram corrigidos mais quatro problemas encontrados na
+verificação visual (snapshot PNG com o mundo real):
+
+| Problema | Correção |
+|---|---|
+| Faixa preta entre o céu e o chão | A faixa mais distante começa **exatamente** no horizonte |
+| Chão listrado (aliasing) | Amostragem **por coluna** com projeção inversa, em vez de uma grade fixa de amostras |
+| Tecido instável à distância | Progressão **geométrica** das faixas de profundidade + cache por tile |
+| Personagens sumiam em borda de faixa | Atores desenhados **depois** do terreno (e não dentro do laço de faixas) |
+| Céu preto acima do horizonte | `drawFirstPersonSky()` com gradiente por hora do dia |
+
+**Resultado verificado:** o terreno começa em y ≈ 405, 104 960 faixas
+visíveis, o horizonte fica contínuo, os zumbis aparecem dimensionados
+pela distância e a vista de cima permanece idêntica.
+
+### 8.2 Acesso à câmera dentro do jogo
+
+A opção só existia no menu principal. Agora há **três** formas de
+ligar/desligar durante a partida:
+
+1. **Tecla `V`** — atalho dentro do jogo (ignorado quando o foco está
+   num campo de texto).
+2. **Botão no HUD** — “👁 1ª pessoa ON/OFF” no painel lateral.
+3. **Menu principal** — configurações → *Câmera em primeira pessoa*.
+
+O botão do celular (👁 na barra superior) também liga/desliga, para
+quem joga pelo celular e não tem teclado.
+
 * **Ativação:** configurações → *Câmera em primeira pessoa* (liga/desliga).
 * **Persistência:** por jogador, em `localStorage` (`knox-fpv-<userId>`) e
   também espelhada no save da conta (`PlayerSave.firstPerson`).
@@ -254,7 +311,7 @@ Nenhuma dessas opções altera regras de jogo.
 
 ## 10. Testes executados
 
-Comando: `npm test` (Vitest) — **155 testes, 10 arquivos, todos passando.**
+Comando: `npm test` (Vitest) — **161 testes, 12 arquivos, todos passando.**
 
 | Arquivo | Testes | Cobre |
 |---|---|---|
@@ -262,6 +319,8 @@ Comando: `npm test` (Vitest) — **155 testes, 10 arquivos, todos passando.**
 | `tests/voiceActivation.test.ts` | 13 | Detecção de suporte; permissão concedida (com liberação do dispositivo), negada, microfone ausente, sem `mediaDevices`; estado da permissão; recognizer iniciar/parar; transcrições finais vs. intermediárias; permissão revogada durante a escuta |
 | `tests/panelCommand.test.ts` | 14 | Sintaxe documentada; aliases;recurso inválido; alvo ausente; payloads de código/URL/SQL; ids malformados; tokens extras; sugestão de alternativas válidas |
 | `tests/firstPerson.test.ts` | 7 | Persistência por jogador; survives reload; default desligado; toggle; clamp de FOV/sensibilidade; espelhamento no save sem tocar em stats de gameplay |
+| `tests/firstPersonProjection.test.ts` | 5 | Geometria da projeção: o terreno cai **dentro** da tela; o horizonte fica entre y = 100 e y = 500; a metade inferior da tela está 100 % pintada; um zumbi a 5 unidades cai em tela; a vista de cima permanece inalterada |
+| `tests/firstPersonVisual.test.ts` | 1 | **Snapshot visual com o mundo real**: renderiza a primeira pessoa e grava um PNG; confirma céu azul, chão 100 % pintado, horizonte **sem buraco preto**, pelo menos 3 zumbis visíveis e faixas de terreno contínuas |
 | `tests/firstPersonRenderer.test.ts` | 9 | Render top-down vs. primeira pessoa; o personagem **não** se move na troca nem durante a transição; avatar local oculto enquanto os outros jogadores continuam a ser desenhados; view model e crosshair; `reduceMotion`; FOV fora de faixa sem lançar erro; render com e sem zumbis |
 | `tests/serverAuthorization.test.mjs` | 29 | Allowlist de ids; rejeição de nomes parecidos; sessão emitida/ revogada / revogada em massa; cooldown por comando, por janela e de ativação; allowlist de efeitos; recurso inválido; alvo desconectado/desconhecido; limites por sala e por alvo; ausência de ponto seguro;sonda de mundo determinística e paridade com o mundo do cliente |
 | `tests/serverIntegration.test.mjs` | 16 | HTTP real contra `ws-server.mjs`: permissão concedida/negada; nome parecido; id autorizado com nome estrangeiro; spawn sem token; token forjado; recurso inválido; alvo desconectado; cooldown (inclusive consumindo o slot em tentativa rejeitada); corpo inválido; feed de auditoria e lista de jogadores sem token; rota inexistente |
