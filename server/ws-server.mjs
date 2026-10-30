@@ -29,6 +29,7 @@ import { WebSocketServer } from "ws";
 
 import {
   ADMIN_ACCOUNT_IDS,
+  ADMIN_ACCESS_CODE,
   SPAWNABLE_EFFECTS,
   SPAWNABLE_IDS,
   LIMITS,
@@ -52,10 +53,36 @@ import {
 import { resolveSpawnRequest } from "./panelSpawn.mjs";
 import { audit, readAudit } from "./auditLog.mjs";
 import { tileAt, isBlocked } from "./worldProbe.mjs";
+import { applySecurityHeaders, redirectToHttps } from "./securityHeaders.mjs";
+import {
+  readJsonBody as readValidatedJsonBody,
+  validateAccountId,
+  validateDisplayName,
+  validateId,
+  validateRoomId,
+  sanitizeText,
+} from "./validation.mjs";
 
 const PORT = process.env.PORT || 8080;
 const TICK_RATE = 10; // 10 updates per second
 const TIMEOUT = 15000;
+/** Maximum size of a single WebSocket message (8 KB). */
+const MAX_WS_MESSAGE_BYTES = 8 * 1024;
+
+/**
+ * HTTPS enforcement.
+ *
+ * When FORCE_HTTPS=1 (or NODE_ENV=production) every plain-HTTP
+ * request is redirected to HTTPS. Behind a proxy we trust
+ * `X-Forwarded-Proto`.
+ */
+const FORCE_HTTPS =
+  process.env.FORCE_HTTPS === "1" ||
+  process.env.FORCE_HTTPS === "true" ||
+  process.env.NODE_ENV === "production";
+
+/** Allowed CORS origin for the game API (empty = same-origin only). */
+const ALLOWED_ORIGIN = (process.env.ALLOWED_ORIGIN || "").trim();
 
 // Load optional admin accounts file (alternative to env var).
 const ADMIN_ACCOUNTS_FILE = process.env.ADMIN_ACCOUNTS_FILE;
@@ -113,7 +140,41 @@ function countEffectsForTarget(room, targetId) {
 
 // Create HTTP server with status page
 const httpServer = createServer(async (req, res) => {
-  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  const isSecure = Boolean(req.socket && req.socket.encrypted);
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const effectiveSecure = isSecure || forwardedProto === "https";
+
+  // ── Security headers on EVERY response ──────────────────────
+  applySecurityHeaders(res, { isSecure: effectiveSecure, hsts: FORCE_HTTPS || effectiveSecure });
+
+  // ── Force HTTPS: redirect plain HTTP ────────────────────────
+  if (FORCE_HTTPS && redirectToHttps(req, res, req.headers.host)) {
+    return;
+  }
+
+  // ── CORS: only the configured origin, never "*" ─────────────
+  const origin = String(req.headers.origin || "");
+  if (ALLOWED_ORIGIN && origin === ALLOWED_ORIGIN) {
+    res.setHeader("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Access-Control-Max-Age", "600");
+  }
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  let url;
+  try {
+    url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  } catch {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: "bad-request" }));
+    return;
+  }
 
   if (url.pathname === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -124,12 +185,13 @@ const httpServer = createServer(async (req, res) => {
       uptime: Math.floor((Date.now() - startTime) / 1000),
       totalConnections,
       adminConfigured: ADMIN_ACCOUNT_IDS.size > 0,
+      https: effectiveSecure,
     }));
     return;
   }
 
   if (url.pathname === "/" && req.method === "GET") {
-    res.writeHead(200, { "Content-Type": "text/html" });
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(getStatusPage());
     return;
   }
@@ -145,14 +207,24 @@ const httpServer = createServer(async (req, res) => {
   //  whether the name exists.
   // ------------------------------------------------------------
   if (url.pathname === "/admin/permission" && req.method === "POST") {
-    const body = await readJsonBody(req);
-    if (!body) {
-      res.writeHead(400, { "Content-Type": "application/json" });
+    const parsed = await readValidatedJsonBody(req);
+    if (!parsed.ok) {
+      const status = parsed.error === "body-too-large" ? 413 : 400;
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ granted: false, error: parsed.error }));
+      return;
+    }
+    const body = parsed.value;
+    // Validate the shape of every field before it reaches the
+    // allowlist logic — a malformed id never reaches the resolver.
+    const accountId = validateAccountId(body.accountId) ?? "";
+    const displayName = validateDisplayName(body.displayName) ?? "";
+    if (!accountId) {
+      audit("admin.permission", "denied", { accountId: null, reason: "invalid-account-id" });
+      res.writeHead(403, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ granted: false }));
       return;
     }
-    const accountId = typeof body.accountId === "string" ? body.accountId : "";
-    const displayName = typeof body.displayName === "string" ? body.displayName : "";
     const resolved = resolveAuthorizedAccountId({ accountId, displayName });
 
     if (!resolved) {
@@ -178,6 +250,10 @@ const httpServer = createServer(async (req, res) => {
       displayName,
       expiresInMs: LIMITS.SESSION_TTL_MS,
       spawnable: SPAWNABLE_IDS,
+      // The access code is disclosed ONLY to an account that just
+      // passed the server-side allowlist check. It is never part of
+      // the browser bundle — it lives in the server environment.
+      accessCode: ADMIN_ACCESS_CODE || null,
       limits: {
         cooldownMs: LIMITS.COMMAND_COOLDOWN_MS,
         maxPerWindow: LIMITS.MAX_COMMANDS_PER_WINDOW,
@@ -231,12 +307,14 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
-    const body = await readJsonBody(req);
-    if (!body) {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: false, code: "requisicao-invalida" }));
+    const parsedSpawn = await readValidatedJsonBody(req);
+    if (!parsedSpawn.ok) {
+      const status = parsedSpawn.error === "body-too-large" ? 413 : 400;
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, code: parsedSpawn.error }));
       return;
     }
+    const body = parsedSpawn.value;
 
     // Re-check the rate limit on EVERY privileged command.
     const rate = checkCommandRate(session.accountId);
@@ -254,9 +332,12 @@ const httpServer = createServer(async (req, res) => {
     // requests without ever hitting the limit.
     recordCommand(session.accountId);
 
-    const room = roomKey(body.room);
-    const targetId = typeof body.targetId === "string" ? body.targetId : "";
-    const effectId = typeof body.effectId === "string" ? body.effectId : "";
+    // Validate every field before it is used. The effect id must
+    // match the strict id pattern AND be on the server allowlist;
+    // the target id must be a well-formed player id.
+    const room = roomKey(validateRoomId(body.room) ?? "global");
+    const targetId = typeof body.targetId === "string" ? body.targetId.trim().slice(0, 64) : "";
+    const effectId = validateId(body.effectId) ?? "";
 
     const resolution = resolveSpawnRequest({
       effectId,
@@ -351,7 +432,9 @@ const httpServer = createServer(async (req, res) => {
       res.end(JSON.stringify({ ok: false }));
       return;
     }
-    const room = url.searchParams.get("room") || "global";
+    // Validate the room id — it arrives from the query string.
+    const rawRoom = url.searchParams.get("room") || "global";
+    const room = validateRoomId(rawRoom) ?? "global";
     const list = [];
     for (const p of players.values()) {
       if (p.room !== roomKey(room)) continue;
@@ -388,30 +471,6 @@ function bearerToken(req) {
   return "";
 }
 
-/** Read a JSON body with a hard size cap (4 KB). */
-function readJsonBody(req) {
-  return new Promise((resolve) => {
-    let size = 0;
-    const chunks = [];
-    req.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > 4096) {
-        resolve(null);
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-      } catch {
-        resolve(null);
-      }
-    });
-    req.on("error", () => resolve(null));
-  });
-}
 
 // WebSocket server
 const wss = new WebSocketServer({ server: httpServer });
@@ -450,12 +509,27 @@ wss.on("connection", (ws, req) => {
   }));
 
   ws.on("message", (data) => {
-    try {
-      const msg = JSON.parse(data.toString());
-      handleMessage(playerId, msg);
-    } catch {
-      // Invalid JSON
+    // Reject oversized frames before parsing them — a client must
+    // not be able to make the server allocate arbitrary memory.
+    const raw = typeof data === "string" ? data : data.toString("utf8");
+    if (raw.length > MAX_WS_MESSAGE_BYTES) {
+      try { ws.close(1009, "message-too-big"); } catch { /* ignore */ }
+      return;
     }
+    let msg;
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return; // Invalid JSON — ignore silently.
+    }
+    if (!msg || typeof msg !== "object" || Array.isArray(msg)) return;
+    // Drop prototype-polluting keys.
+    for (const key of Object.keys(msg)) {
+      if (key === "__proto__" || key === "constructor" || key === "prototype") {
+        delete msg[key];
+      }
+    }
+    handleMessage(playerId, msg);
   });
 
   ws.on("close", () => {
@@ -516,8 +590,13 @@ function handleMessage(playerId, msg) {
     case "join":
     case "state":
     case "heartbeat": {
-      if (typeof msg.name === "string" && msg.name) player.name = msg.name.slice(0, 40);
-      if (typeof msg.room === "string") player.room = roomKey(msg.room);
+      if (typeof msg.name === "string") {
+        const cleanName = sanitizeText(msg.name, 40);
+        if (cleanName) player.name = cleanName;
+      }
+      if (typeof msg.room === "string") {
+        player.room = roomKey(validateRoomId(msg.room) ?? "global");
+      }
       if (Number.isFinite(msg.x)) player.x = msg.x;
       if (Number.isFinite(msg.y)) player.y = msg.y;
       if (Number.isFinite(msg.angle)) player.angle = msg.angle;
@@ -553,7 +632,11 @@ function handleMessage(playerId, msg) {
 
     case "chat": {
       if (!msg.chatText) break;
-      const text = String(msg.chatText).slice(0, LIMITS.MAX_COMMAND_LENGTH);
+      // Strip control characters (including \u2028/\u2029 which
+      // break JSON in some parsers) and cap the length. The text is
+      // rendered as plain text by the client, and React escapes it.
+      const text = sanitizeText(msg.chatText, LIMITS.MAX_COMMAND_LENGTH);
+      if (!text) break;
       const chatMsg = {
         type: "chat",
         id: playerId,
@@ -577,8 +660,8 @@ function handleMessage(playerId, msg) {
     //  authenticated account id; the server decides.
     // -------------------------------------------------------
     case "admin-auth": {
-      const accountId = typeof msg.accountId === "string" ? msg.accountId : "";
-      const displayName = typeof msg.displayName === "string" ? msg.displayName : "";
+      const accountId = validateAccountId(msg.accountId) ?? "";
+      const displayName = validateDisplayName(msg.displayName) ?? "";
       const resolved = resolveAuthorizedAccountId({ accountId, displayName });
       if (!resolved) {
         audit("admin.auth", "denied", { accountId: accountId || null, reason: "not-allowlisted" });

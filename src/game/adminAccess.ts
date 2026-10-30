@@ -45,6 +45,14 @@ interface ServerPermissionState {
   accountId: string | null;
   checkedAt: number | null;
   spawnable: string[];
+  /**
+   * The admin access code, as disclosed by the server to an
+   * account that already passed the allowlist check.
+   *
+   * It is NEVER bundled with the client — it lives in the server
+   * environment and only travels over an authenticated request.
+   */
+  accessCode: string | null;
 }
 
 let serverPermission: ServerPermissionState = {
@@ -53,6 +61,7 @@ let serverPermission: ServerPermissionState = {
   accountId: null,
   checkedAt: null,
   spawnable: [],
+  accessCode: null,
 };
 
 /**
@@ -101,7 +110,7 @@ export function hasServerPermission(): boolean {
 export async function requestServerPermission(account: AccountInfo): Promise<ServerPermissionState> {
   const endpoint = getAdminApiBase();
   if (!endpoint) {
-    serverPermission = { mode: "unconfigured", token: null, accountId: null, checkedAt: Date.now(), spawnable: [] };
+    serverPermission = { mode: "unconfigured", token: null, accountId: null, checkedAt: Date.now(), spawnable: [], accessCode: null };
     return serverPermission;
   }
   try {
@@ -111,7 +120,7 @@ export async function requestServerPermission(account: AccountInfo): Promise<Ser
       body: JSON.stringify({ accountId: account.id, displayName: account.username }),
     });
     if (!res.ok) {
-      serverPermission = { mode: "denied", token: null, accountId: null, checkedAt: Date.now(), spawnable: [] };
+      serverPermission = { mode: "denied", token: null, accountId: null, checkedAt: Date.now(), spawnable: [], accessCode: null };
       return serverPermission;
     }
     const data = (await res.json()) as {
@@ -119,6 +128,7 @@ export async function requestServerPermission(account: AccountInfo): Promise<Ser
       token?: string;
       accountId?: string;
       spawnable?: string[];
+      accessCode?: string | null;
     };
     serverPermission = data.granted && data.token
       ? {
@@ -127,11 +137,12 @@ export async function requestServerPermission(account: AccountInfo): Promise<Ser
           accountId: data.accountId ?? account.id,
           checkedAt: Date.now(),
           spawnable: Array.isArray(data.spawnable) ? data.spawnable : [],
+          accessCode: typeof data.accessCode === "string" ? data.accessCode : null,
         }
-      : { mode: "denied", token: null, accountId: null, checkedAt: Date.now(), spawnable: [] };
+      : { mode: "denied", token: null, accountId: null, checkedAt: Date.now(), spawnable: [], accessCode: null };
   } catch {
     // Servidor inacessível: NÃO conceder por conta própria.
-    serverPermission = { mode: "denied", token: null, accountId: null, checkedAt: Date.now(), spawnable: [] };
+    serverPermission = { mode: "denied", token: null, accountId: null, checkedAt: Date.now(), spawnable: [], accessCode: null };
   }
   notifyPermissionListeners();
   return serverPermission;
@@ -165,6 +176,15 @@ export function getServerToken(): string | null {
 }
 
 /** The allowlist of invocable effect ids, as provided by the server. */
+/**
+ * The admin access code disclosed by the server (or null when the
+ * server did not provide one). It is only populated for an account
+ * the server has already authorized.
+ */
+export function getAdminAccessCode(): string | null {
+  return serverPermission.accessCode;
+}
+
 export function getSpawnableIds(): string[] {
   return [...serverPermission.spawnable];
 }
@@ -195,7 +215,7 @@ export function getServerPermissionState(): ServerPermissionState {
 }
 
 export function resetServerPermission() {
-  serverPermission = { mode: "unknown", token: null, accountId: null, checkedAt: null, spawnable: [] };
+  serverPermission = { mode: "unknown", token: null, accountId: null, checkedAt: null, spawnable: [], accessCode: null };
   notifyPermissionListeners();
 }
 

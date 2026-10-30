@@ -75,6 +75,18 @@ export const ADMIN_ACCOUNT_NAMES = parseAccountNames();
 export const ADMIN_DISPLAY_NAMES = Object.keys(ADMIN_ACCOUNT_NAMES);
 
 /**
+ * The admin access code shown to an AUTHORIZED admin.
+ *
+ * 🔒  It is NOT stored in this repository — it comes from the
+ *     environment variable `ADMIN_ACCESS_CODE`.
+ *
+ * The server returns it ONLY to a session that already passed the
+ * account allowlist check. A client that is not authorized never
+ * receives it, and the value never appears in the browser bundle.
+ */
+export const ADMIN_ACCESS_CODE = (process.env.ADMIN_ACCESS_CODE || "").trim();
+
+/**
  * Is this account id allowed to administer?
  * This is the ONLY authorization primitive. Display names are
  * matched exactly afterwards, but never used as the identity.

@@ -27,9 +27,22 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
     return [];
   })();
 
-  const handleLogin = () => {
+  /**
+   * Honeypot: a real human never sees or fills this field (it is
+   * hidden with CSS and removed from the tab order). Automated
+   * spam bots fill every input they find, so a non-empty value is
+   * proof of automation.
+   */
+  const [website, setWebsite] = useState("");
+
+  const handleLogin = async () => {
     setError(null);
-    const result = Auth.login(username, password);
+    if (website.trim()) {
+      // Pretend it worked — do not tell the bot why it failed.
+      setError("Credenciais inválidas");
+      return;
+    }
+    const result = await Auth.login(username, password);
     if (!result.success || !result.user) {
       setError(result.error ?? "Erro desconhecido");
       return;
@@ -38,9 +51,13 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
     onLogin(result.user, save);
   };
 
-  const handleRegister = () => {
+  const handleRegister = async () => {
     setError(null);
-    const result = Auth.register(username, email, password);
+    if (website.trim()) {
+      setError("Não foi possível criar a conta");
+      return;
+    }
+    const result = await Auth.register(username, email, password);
     if (!result.success || !result.user) {
       setError(result.error ?? "Erro desconhecido");
       return;
@@ -107,6 +124,8 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
                     type="text"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
+                    autoComplete="username"
+                    maxLength={254}
                     placeholder={mode === "login" ? "seu_nome ou email@exemplo.com" : "ex: SurvivorPro"}
                     className="w-full border border-[#2a2a2a] bg-black px-3 py-2 text-sm text-zinc-200 outline-none focus:border-[#4a5c45]"
                   />
@@ -118,6 +137,8 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
                       type="email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
+                      autoComplete="email"
+                      maxLength={254}
                       placeholder="email@exemplo.com"
                       className="w-full border border-[#2a2a2a] bg-black px-3 py-2 text-sm text-zinc-200 outline-none focus:border-[#4a5c45]"
                     />
@@ -129,9 +150,31 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && (mode === "login" ? handleLogin() : handleRegister())}
-                    placeholder="mín. 4 caracteres"
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter") return;
+                      e.preventDefault();
+                      if (mode === "login") void handleLogin();
+                      else void handleRegister();
+                    }}
+                    placeholder="mín. 8 caracteres"
+                    autoComplete={mode === "login" ? "current-password" : "new-password"}
+                    minLength={8}
+                    maxLength={200}
                     className="w-full border border-[#2a2a2a] bg-black px-3 py-2 text-sm text-zinc-200 outline-none focus:border-[#4a5c45]"
+                  />
+                </div>
+
+                {/* Honeypot anti-spam field — hidden from humans, filled by bots. */}
+                <div className="hidden" aria-hidden="true">
+                  <label htmlFor="knx-website">Website</label>
+                  <input
+                    id="knx-website"
+                    name="website"
+                    type="text"
+                    tabIndex={-1}
+                    autoComplete="off"
+                    value={website}
+                    onChange={(e) => setWebsite(e.target.value)}
                   />
                 </div>
 
@@ -140,7 +183,10 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
                 )}
 
                 <button
-                  onClick={mode === "login" ? handleLogin : handleRegister}
+                  onClick={() => {
+                    if (mode === "login") void handleLogin();
+                    else void handleRegister();
+                  }}
                   className="w-full bg-[#8a2f22] py-3 text-sm font-black uppercase tracking-widest text-zinc-100 hover:bg-[#b5452e]"
                 >
                   {mode === "login" ? "🔓 Entrar" : "✨ Criar Conta"}

@@ -254,7 +254,7 @@ Nenhuma dessas opções altera regras de jogo.
 
 ## 10. Testes executados
 
-Comando: `npm test` (Vitest) — **111 testes, 8 arquivos, todos passando.**
+Comando: `npm test` (Vitest) — **155 testes, 10 arquivos, todos passando.**
 
 | Arquivo | Testes | Cobre |
 |---|---|---|
@@ -265,15 +265,18 @@ Comando: `npm test` (Vitest) — **111 testes, 8 arquivos, todos passando.**
 | `tests/firstPersonRenderer.test.ts` | 9 | Render top-down vs. primeira pessoa; o personagem **não** se move na troca nem durante a transição; avatar local oculto enquanto os outros jogadores continuam a ser desenhados; view model e crosshair; `reduceMotion`; FOV fora de faixa sem lançar erro; render com e sem zumbis |
 | `tests/serverAuthorization.test.mjs` | 29 | Allowlist de ids; rejeição de nomes parecidos; sessão emitida/ revogada / revogada em massa; cooldown por comando, por janela e de ativação; allowlist de efeitos; recurso inválido; alvo desconectado/desconhecido; limites por sala e por alvo; ausência de ponto seguro;sonda de mundo determinística e paridade com o mundo do cliente |
 | `tests/serverIntegration.test.mjs` | 16 | HTTP real contra `ws-server.mjs`: permissão concedida/negada; nome parecido; id autorizado com nome estrangeiro; spawn sem token; token forjado; recurso inválido; alvo desconectado; cooldown (inclusive consumindo o slot em tentativa rejeitada); corpo inválido; feed de auditoria e lista de jogadores sem token; rota inexistente |
+| `tests/security.test.ts` | 26 | PBKDF2 (formato, salt único, senha errada, hash malformado, guarda de DoS nas iterações, comparação em tempo constante); validação de nome/email/senha; bloqueio progressivo de força bruta; mensagem genérica anti-enumeração; rate limit por janela deslizante; senha nunca gravada em claro; registro envenenado no `localStorage` descartado; **nenhum nome autorizado no cliente** |
+| `tests/serverSecurity.test.mjs` | 18 | Cabeçalhos em 200/404; `Content-Type` inválido; JSON malformado; corpo grande (413); corpo-array; `__proto__`; código de acesso **só** para conta autorizada; nome parecido; token forjado; header `Authorization` malformado; cooldown consumido em tentativa rejeitada |
 | `tests/serverWebsocket.test.mjs` | 8 | WebSocket real contra `ws-server.mjs`: `assignId`; concessão de admin via `admin-auth`; negação de id não autorizado; negação de nome ligado a outro id; spawn de `panel-spawn` sem token (`sem-permissao`); spawn bem-sucedido perto de um alvo conectado, com replicação na sala e verificação de distância por posição; alvo desconectado (`alvo-desconectado`); **isolamento por sala** na lista de alvos |
 
 Verificações adicionais executadas:
 
 * `npx tsc --noEmit` — sem erros de tipos.
-* `npm run build` — bundle gerado com sucesso (969 kB, 280 kB gzip).
+* `npm run build` — bundle gerado com sucesso (999,58 kB, 289,56 kB gzip).
 * Varredura do bundle final (`dist/index.html`): **0 ocorrências** de
-  `e4dd9d674` (código de acesso removido), **0 ocorrências** de
-  `e8c1f4a20b937d5ae6f0c4137d92bb58` (chave de assinatura removida) e
+  do antigo código de acesso do admin (removido), **0 ocorrências** de
+  qualquer literal de 8 dígitos hexadecimais (chave de assinatura antiga,
+  removida) e
   **0 ocorrências** de `RimuOfc` / `Guisdfas` (allowlist só no servidor).
 * `node --check` em todos os arquivos `.mjs` do servidor.
 
@@ -323,11 +326,104 @@ simulado, e não por inspeção visual.
 
 ---
 
+## 11.1 Atualização: auditoria de segurança + motores acelerados
+
+Uma segunda rodada de trabalho foi aplicada sobre esta entrega:
+
+### Auditoria de segurança (18 achados, 18 corrigidos)
+
+Documento completo em **`AUDITORIA_SEGURANCA.md`**. Resumo:
+
+| # | Achado | Severidade | Correção |
+|---|---|---|---|
+| 1 | Chave secreta do Paddle versionada | **Crítica** | Removida do código e do histórico git |
+| 2 | Senhas com hash de 32 bits | **Crítica** | PBKDF2-HMAC-SHA256, 210 000 iterações, salt de 16 bytes (WebCrypto, zero dependência) |
+| 3 | Token de sessão com `Math.random()` | **Alta** | CSPRNG (`crypto.getRandomValues`), 256 bits de entropia |
+| 4 | Sem cabeçalhos de segurança | **Alta** | CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy |
+| 5 | Sem HTTPS forçado | **Alta** | Redirecionamento 301 com validação do `Host` (anti open-redirect) |
+| 6 | Corpo de requisição sem limite | **Alta** | Limite de 16 KB, `Content-Type` obrigatório, `413` no excedente |
+| 7 | Sem rate limiting em login | **Alta** | Janela deslizante: 10 tentativas / 10 s |
+| 8 | Sem proteção contra força bruta | **Alta** | Bloqueio progressivo 30 s → 15 min após 5 falhas |
+| 9 | Nome autorizado no bundle | **Alta** | Allowlist só no servidor; o cliente pergunta e obedece |
+| 10 | Chave de assinatura hardcoded | **Alta** | Chave aleatória por dispositivo |
+| 11 | `localStorage` aceitando campos de privilégio | **Média** | Registro reconstruído só com os campos esperados |
+| 12 | WebSocket sem limite de tamanho | **Média** | 8 KB por mensagem, `close(1009)` |
+| 13 | Poluição de protótipo via JSON | **Média** | `__proto__`/`constructor`/`prototype` removidos |
+| 14 | Chat sem saneamento | **Média** | Caracteres de controle removidos, tamanho limitado |
+| 15 | CORS sem restrição | **Média** | Só a origem configurada (padrão: same-origin) |
+| 16 | Formulários sem anti-spam | **Média** | Honeypot invisível |
+| 17 | Senha mínima de 4 caracteres | **Baixa** | Elevada para 8 |
+| 18 | Enumeração de contas | **Baixa** | Mensagem genérica "Credenciais inválidas" |
+
+**Código de acesso reintroduzido sem vazar:** o valor vive apenas em
+`ADMIN_ACCESS_CODE` (variável de ambiente do servidor) e é devolvido
+**somente** a uma conta que já passou pela allowlist. O painel mostra o
+código na aba *Security* com botão de copiar. O bundle do navegador não
+o contém.
+
+**Ativar painel:** funciona **somente** para `guisdfas` e `RimuOfc` — e a
+decisão é do servidor (`ADMIN_ACCOUNT_IDS` + `ADMIN_ACCOUNT_NAMES`). A
+frase `ativar painel` continua não sendo autenticação.
+
+### Motores acelerados implementados
+
+| Motor | Papel | Como é carregado |
+|---|---|---|
+| **PixiJS 8.22** | Camada de sprites/partículas (WebGL/WebGPU) | `public/engines/pixi.mjs`, sob demanda |
+| **Phaser 4.2** | Camada de cenas 2D / UI | `public/engines/phaser.mjs`, sob demanda |
+| **PlayCanvas 2.23** | Visualizador 3D (WebGL2/WebGPU) | `public/engines/playcanvas.mjs`, sob demanda |
+| **Rapier 0.21** | Física 2D em WebAssembly | `public/engines/rapier2d.mjs`, sob demanda |
+| **Godot 4 (HTML5)** | Build WebGL2 + WASM hospedada em iframe com sandbox | `public/godot/` (opcional) |
+| **WebGL2 / WebGPU** | Contexto acelerado + batcher de sprites próprio | Nativo, sem dependência |
+
+Todos são **opcionais e degradados**: se o pacote não estiver presente, o
+jogo continua no Canvas 2D original, com a mesma aparência. **Nenhuma
+regra de jogo foi alterada** — o renderer, a física de colisão, o
+alcance, a dano, as hitboxes e o balanceamento continuam intactos.
+
+Novo painel **Engines** no Admin Panel: FPS, tempo de frame, qualidade
+adaptativa (Baixa/Média/Alta) e o estado de cada motor.
+
+**Impacto no bundle:** o HTML principal ficou em **999,58 kB** (gzip
+289,56 kB) — os motores são resolvidos **em tempo de execução** a partir
+de `/engines/`, então não são embutidos. Sem isso o single-file passaria
+de ~1 MB para ~9 MB.
+
+### Botão de download removido
+
+O botão "⬇️ Baixar Jogo (.HTML)" foi removido do menu principal, a aba
+`game_file` do painel administrativo foi eliminada e
+`src/utils/gameExporter.ts` foi apagado.
+
+### Arquivos novos desta rodada
+
+| Arquivo | Função |
+|---|---|
+| `AUDITORIA_SEGURANCA.md` | Relatório completo da auditoria (18 achados) |
+| `.env.example` | Todas as variáveis de ambiente documentadas |
+| `server/securityHeaders.mjs` | CSP, HSTS, anti-clickjacking, redirecionamento HTTPS |
+| `server/validation.mjs` | Validação e saneamento de entrada (HTTP + WebSocket) |
+| `src/game/passwordHash.ts` | PBKDF2-HMAC-SHA256 com WebCrypto |
+| `src/game/graphicsEngine.ts` | Detecção de backend, batcher WebGL2, profiler, qualidade adaptativa |
+| `src/game/pixiIntegration.ts` | Camada PixiJS + sistema de partículas |
+| `src/game/phaserIntegration.ts` | Camada Phaser |
+| `src/game/playcanvasIntegration.ts` | Visualizador 3D PlayCanvas |
+| `src/game/godotIntegration.ts` | Hospedagem de build Godot (HTML5/WASM) |
+| `src/game/physics.ts` | Rapier (WASM) + fallback determinístico |
+| `src/game/optionalEngines.ts` | Carregamento em tempo de execução dos motores |
+| `src/game/engineModules.ts` | Fachada única de todos os módulos |
+| `src/components/EnginesTab.tsx` | Diagnóstico dos motores no Admin Panel |
+| `scripts/build-engines.mjs` | Gera `public/engines/` |
+| `tests/security.test.ts` | 26 testes de segurança do front-end |
+| `tests/serverSecurity.test.mjs` | 18 testes de segurança do servidor |
+
+---
+
 ## 12. Credencial encontrada e removida do repositório
 
 Ao preparar a entrega, o GitHub **push protection** bloqueou o push porque
 `server/paddleConfig.mjs` trazia uma **chave secreta do Paddle
-(`pdl_live_apikey_…`) como valor padrão** do `process.env`.
+(`pdl_live_apikey_…`, valor redigido aqui) como valor padrão** do `process.env`.
 
 Isso era uma credencial real e give-full-control da conta Paddle. Ela foi
 removida do repositório:

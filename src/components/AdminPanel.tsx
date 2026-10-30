@@ -21,9 +21,9 @@ import type { GameEngine } from "../game/engine";
 import type { GameSnapshot } from "../game/types";
 import CodesTab from "./CodesTab";
 import ServersTab from "./ServersTab";
+import EnginesTab from "./EnginesTab";
 import { AIModeration } from "../game/aiModeration";
 import { VoiceChat } from "../game/voiceChat";
-import { downloadGameHtmlFile } from "../utils/gameExporter";
 import {
   createSession,
   destroySession,
@@ -33,6 +33,7 @@ import {
 import {
   requestServerPermission,
   getAdminApiBase,
+  getAdminAccessCode,
   type AccountInfo,
 } from "../game/adminAccess";
 
@@ -48,6 +49,12 @@ interface AdminPanelProps {
 export default function AdminPanel({ isOpen, onClose, engineRef, snapshot, account = null }: AdminPanelProps) {
   // The session token is issued by the server — never created here.
   const [authenticated, setAuthenticated] = useState(() => sessionValid());
+  /**
+   * The admin access code, as disclosed by the server once the
+   * account has been authorized. It is never bundled with the
+   * client — the server sends it over an authenticated request.
+   */
+  const [accessCode, setAccessCode] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
   const [commandLog, setCommandLog] = useState<string[]>([]);
@@ -102,9 +109,13 @@ export default function AdminPanel({ isOpen, onClose, engineRef, snapshot, accou
     }
     const state = await requestServerPermission(account);
     setChecking(false);
+    if (state.mode === "granted") setAccessCode(getAdminAccessCode());
     if (state.mode === "granted" && state.token) {
       createSession(state.token, state.accountId ?? account.id);
       setAuthenticated(true);
+      // The server discloses the access code only to an account that
+      // just passed the allowlist check.
+      setAccessCode(getAdminAccessCode());
       setError("");
       log("Permissão administrativa confirmada pelo servidor.");
       return;
@@ -144,7 +155,7 @@ export default function AdminPanel({ isOpen, onClose, engineRef, snapshot, accou
     catch (err) { log(`ERRO em "${label}": ${String(err)}`); }
   };
 
-  const tabs = ["voice_ai","game_file","security","servers","codes","quick","items","drop","zombies","weather","vehicle","players","world","stats","cheats","ammo","equip","craft","map","spawn"];
+  const tabs = ["voice_ai","engines","security","servers","codes","quick","items","drop","zombies","weather","vehicle","players","world","stats","cheats","ammo","equip","craft","map","spawn"];
 
   const B = (label: string, action: string, fn: () => void) => (
     <button onClick={() => exe(action, fn)}
@@ -355,47 +366,48 @@ export default function AdminPanel({ isOpen, onClose, engineRef, snapshot, accou
                 </div>
               )}
 
-              {/* ════════════════════════════════════ GAME FILE DOWNLOAD ════════════════════ */}
-              {tab === "game_file" && (
-                <div className="space-y-4">
-                  <div className="border border-[#5a8aaa] bg-[#0e1620] p-4">
-                    <p className="font-['Oswald'] text-sm font-bold uppercase tracking-[0.24em] text-[#8ab0cc]">
-                      💾 Baixar Arquivo do Jogo Completo (.HTML)
-                    </p>
-                    <p className="mt-1 font-mono text-[10px] leading-relaxed text-[#bcd6eb]">
-                      O jogo foi construído como um pacote único e independente (Single-File HTML).
-                      Você pode baixá-lo diretamente para seu computador ou celular e abrir com dois cliques
-                      para jogar offline sem precisar de internet ou servidor!
-                    </p>
-                  </div>
-
-                  <div className="border border-[#1f2521] bg-[#0a0a0a] p-4 text-center space-y-3">
-                    <p className="text-xs text-zinc-300">
-                      Clique no botão abaixo para salvar o arquivo <code className="text-[#d7c9a7]">Day_of_the_Undead.html</code> no seu dispositivo:
-                    </p>
-                    <button
-                      onClick={async () => {
-                        const ok = await downloadGameHtmlFile();
-                        if (ok) log("Download do arquivo do jogo (.html) iniciado!");
-                      }}
-                      className="border-2 border-[#7fc25a] bg-[#0f1a10] px-6 py-3 font-['Oswald'] text-sm font-bold uppercase tracking-[0.2em] text-[#7fc25a] hover:bg-[#152616] active:scale-95 shadow-lg shadow-black"
-                    >
-                      ⬇️ Baixar Jogo Agora (.HTML)
-                    </button>
-                    <p className="text-[9px] text-zinc-500">
-                      Tamanho aproximado: ~590KB (contém todo o código, sprites procedural, áudio sintetizado e lógica).
-                    </p>
-                  </div>
-                </div>
-              )}
-
               {/* ════════════════════════════════════ SECURITY ════════════════════ */}
               {tab === "security" && (
                 <div className="space-y-4">
+                  {/* Access code — disclosed by the SERVER only to an
+                      account that already passed the allowlist check.
+                      It is never part of the browser bundle. */}
+                  {accessCode && (
+                    <div className="border border-[#7fc25a]/40 bg-[#0a140a] p-3">
+                      <p className="mb-2 text-[10px] uppercase tracking-widest text-[#7fc25a]">
+                        🔑 Código de acesso administrativo
+                      </p>
+                      <div className="flex items-center gap-3">
+                        <code className="select-all break-all border border-[#1f2521] bg-black px-3 py-2 font-mono text-sm tracking-widest text-[#cdd7bf]">
+                          {accessCode}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void navigator.clipboard?.writeText(accessCode);
+                            log("Código de acesso copiado.");
+                          }}
+                          className="border border-[#4a5c45] bg-[#1f2521] px-3 py-2 text-[10px] uppercase tracking-widest text-[#cdd7bf] hover:bg-[#2b352e]"
+                        >
+                          Copiar
+                        </button>
+                      </div>
+                      <p className="mt-2 font-mono text-[9px] leading-relaxed text-zinc-600">
+                        Exibido pelo servidor somente após validar a conta. Não está no bundle do
+                        navegador — quem não estiver autorizado nunca o recebe.
+                      </p>
+                    </div>
+                  )}
+
                   <div className="border border-[#1f2521] bg-[#0a0a0a] p-3">
                     <p className="mb-2 text-[10px] uppercase tracking-widest text-[#7f936f]">🔐 Postura de segurança</p>
                     <ul className="space-y-1.5 font-mono text-[10px] leading-relaxed text-zinc-400">
-                      <li><span className="text-[#7fc25a]">✓</span> Sem senha e sem código de acesso no bundle — nada é compartilhado com o jogador</li>
+                      <li><span className="text-[#7fc25a]">✓</span> Sem senha nem código de acesso no bundle — o código é enviado pelo servidor apenas a contas já autorizadas</li>
+                      <li><span className="text-[#7fc25a]">✓</span> Senhas de conta com PBKDF2-HMAC-SHA256 (210 000 iterações) e sal aleatório de 16 bytes</li>
+                      <li><span className="text-[#7fc25a]">✓</span> Proteção contra força bruta: bloqueio progressivo da conta e limite de tentativas</li>
+                      <li><span className="text-[#7fc25a]">✓</span> Campos de formulário com <em>honeypot</em> anti-spam e validação de entrada</li>
+                      <li><span className="text-[#7fc25a]">✓</span> Cabeçalhos de segurança (CSP, HSTS, X-Frame-Options, X-Content-Type-Options) em todas as respostas</li>
+                      <li><span className="text-[#7fc25a]">✓</span> HTTPS forçado com redirecionamento automático a partir de HTTP</li>
                       <li><span className="text-[#7fc25a]">✓</span> Permissão emitida pelo servidor a partir do identificador estável da conta (<code>ADMIN_ACCOUNT_IDS</code>)</li>
                       <li><span className="text-[#7fc25a]">✓</span> Token de sessão opaco, guardado apenas no servidor e na <code>sessionStorage</code></li>
                       <li><span className="text-[#7fc25a]">✓</span> Token revalidado a cada comando privilegiado; encerrar sessão ou revogar a permissão remove o acesso</li>
@@ -439,6 +451,8 @@ export default function AdminPanel({ isOpen, onClose, engineRef, snapshot, accou
               )}
 
               {/* ════════════════════════════════════ SERVERS ════════════════════ */}
+              {tab === "engines" && <EnginesTab engineRef={engineRef} />}
+
               {tab === "servers" && <ServersTab engineRef={engineRef} snapshot={snapshot} onLog={log} />}
 
               {/* ════════════════════════════════════ CODES (WhatsApp sales) ════════════════════ */}

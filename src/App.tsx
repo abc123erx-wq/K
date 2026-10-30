@@ -11,7 +11,6 @@ import ShopPanel from "./components/ShopPanel";
 import Store from "./components/Store";
 import VoiceChatHUD from "./components/VoiceChatHUD";
 import SpecialPanel, { SpecialPanelActivator } from "./components/SpecialPanel";
-import { downloadGameHtmlFile } from "./utils/gameExporter";
 import {
   loadFirstPerson,
   saveFirstPerson,
@@ -151,6 +150,15 @@ export default function App() {
   const [showSpecialPanel, setShowSpecialPanel] = useState(false);
   // Server-confirmed administrative permission for this account.
   const [serverAuthorized, setServerAuthorized] = useState(false);
+  /**
+   * Gate for the special panel's voice activation.
+   *
+   * The verdict comes from the SERVER (`serverAuthorized`), which
+   * checks the account against its allowlist. The client keeps no
+   * name list of its own — otherwise the allowlist would be readable
+   * by anyone who opens the devtools.
+   */
+  const panelUsernameAllowed = serverAuthorized;
   // First-person camera preference (per player, persisted).
   const [firstPerson, setFirstPerson] = useState<FirstPersonSettings>(() =>
     loadFirstPerson(Auth.getCurrentUser()?.id ?? null),
@@ -470,13 +478,6 @@ export default function App() {
                   className="border border-[#c8912a] bg-[#1a1408] px-5 py-3 text-sm font-black uppercase tracking-widest text-[#e8b64a] transition-all hover:bg-[#241a08] hover:shadow-[0_0_24px_-6px_rgba(200,145,42,0.7)]"
                 >
                   🔑 Tenho um código
-                </button>
-                <button
-                  onClick={() => downloadGameHtmlFile()}
-                  className="border border-[#3a6a9a] bg-[#1a2535] px-5 py-3 text-sm font-black uppercase tracking-widest text-[#8ab0cc] hover:bg-[#253545] transition-all active:scale-95 shadow-lg shadow-black"
-                  title="Baixar arquivo offline do jogo para rodar sem internet"
-                >
-                  ⬇️ Baixar Jogo (.HTML)
                 </button>
               </div>
               {showSettings && (
@@ -993,7 +994,7 @@ export default function App() {
           Starts closed. Opens only via the exact voice activation
           phrase, and only for an account the server has authorized. */}
       <SpecialPanelActivator
-        authorized={serverAuthorized}
+        authorized={serverAuthorized && panelUsernameAllowed}
         onActivated={() => setShowSpecialPanel(true)}
       />
       <SpecialPanel

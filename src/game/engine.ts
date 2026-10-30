@@ -3,6 +3,7 @@ import { BossGui, Player, Zombie } from "./entities";
 import { Inventory } from "./inventory";
 import { itemTemplates, makeItem, recipes } from "./items";
 import { Renderer } from "./renderer";
+import { EngineModules } from "./engineModules";
 import type { DeathReport, GameEvent, GameSnapshot, House, Item, Mood, NPC, SandboxOptions } from "./types";
 import { TILE, World } from "./world";
 import { Net, Server, type ServerConfig } from "./net";
@@ -280,6 +281,13 @@ export class GameEngine {
   private onDeath: DeathListener;
   private canvas: HTMLCanvasElement;
 
+  /**
+   * Optional accelerated engines (PixiJS, Phaser, PlayCanvas, Godot,
+   * Rapier/WASM, WebGL2/WebGPU). They are *infrastructure* — the
+   * game rules live entirely in this class and never change.
+   */
+  readonly modules: EngineModules;
+
   constructor(
     canvas: HTMLCanvasElement,
     options: SandboxOptions,
@@ -290,6 +298,9 @@ export class GameEngine {
     savedEquipped?: string | null,
   ) {
     this.canvas = canvas;
+    this.modules = new EngineModules(canvas);
+    // Kick off the optional layers without blocking the first frame.
+    void this.modules.enableAll();
     this.options = options;
     this.onSnapshot = onSnapshot;
     this.onDeath = onDeath;
@@ -337,6 +348,8 @@ export class GameEngine {
     this.audio.stop();
     VoiceChat.stopMicrophone();
     Net.destroy();
+    // Release every optional engine (GPU buffers, WASM world).
+    this.modules.destroy();
   }
 
   /** Find a walkable spawn point near the center */
@@ -1040,6 +1053,9 @@ export class GameEngine {
   private loop = (now: number) => {
     const dt = Math.min(0.05, (now - this.last) / 1000);
     this.last = now;
+    // Feed the profiler + the adaptive quality controller.
+    this.modules.profiler.begin(now);
+    this.modules.quality.update(dt * 1000);
     if (!this.paused && !this.dead) this.update(dt);
 
     // Compute cached values once per frame

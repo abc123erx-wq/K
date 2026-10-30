@@ -105,8 +105,12 @@ describe("client has no name-based authorization", () => {
     ];
     for (const file of files) {
       const source = await fs.readFile(path.resolve(process.cwd(), file), "utf8");
-      expect(source).not.toMatch(/e4dd9d674/);
-      expect(source).not.toMatch(/e8c1f4a20b937d5ae6f0c4137d92bb58/);
+      // The old admin access code was an 8-hex-digit literal; the old
+      // signing key was a 32-hex-digit literal. We assert that NO
+      // such hard-coded literal exists, without repeating the real
+      // values in this file (they are secrets, even when revoked).
+      expect(source).not.toMatch(/["']e[0-9a-f]{8}["']/);
+      expect(source).not.toMatch(/["'][0-9a-f]{32}["']/);
     }
   });
 });

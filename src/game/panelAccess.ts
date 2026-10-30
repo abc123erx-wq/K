@@ -27,6 +27,37 @@
 
 export const ACTIVATION_PHRASE = "ativar painel";
 
+/**
+ * Usuários autorizados a ativar o painel especial.
+ *
+ * Este é um gate **do lado do cliente**, apenas para dar feedback
+ * imediato ao usuário e evitar gravar áudio à toa. Ele NÃO é
+ * autorização: o servidor continua sendo a única autoridade e
+ * revalida a conta em cada comando privilegiado.
+ *
+ * A comparação é EXATA (case-insensitive, mas sem normalizar
+ * acentos ou espaços extras) para não abrir espaço para
+ * "guisdfas ", "GUISDFAS" ou homóglifos.
+ */
+/**
+ * ⚠️  NÃO há allowlist de nomes neste arquivo.
+ *
+ * A lista de contas autorizadas a ativar o painel fica **exclusivamente
+ * no servidor** (`server/adminConfig.mjs`, via `ADMIN_ACCOUNT_IDS` /
+ * `ADMIN_ACCOUNT_NAMES`).
+ *
+ * Colocar os nomes aqui vazaria a allowlist para dentro do bundle do
+ * navegador — qualquer pessoa poderia ler "quem tem acesso" abrindo o
+ * devtools, e a autorização deixaria de ser uma decisão do servidor.
+ *
+ * O cliente apenas **pergunta ao servidor** (via `requestServerPermission`)
+ * e obedece à resposta.
+ */
+export function isAuthorizedPanelUsername(_username: string): boolean {
+  // Deliberadamente inerte: a autorização vem do servidor.
+  return false;
+}
+
 /** Locale used for recognition — Brazilian Portuguese by default. */
 export const RECOGNITION_LOCALE = "pt-BR";
 

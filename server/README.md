@@ -138,6 +138,14 @@ When `ADMIN_ACCOUNT_NAMES` is set, the session's account id **and** its
 exact display name must both match the same entry. Look-alike names
 (`RimuOfc123`, `rimuofc`, ` RimuOfc`) are rejected.
 
+> ⚠️  **Só estas duas contas podem ativar e usar o painel especial.**
+> A frase de ativação **não é autenticação** — o servidor revalida a
+> conta em **cada** comando privilegiado.
+>
+> A allowlist com os nomes vive **apenas no servidor**. O bundle do
+> navegador não contém `RimuOfc` nem `Guisdfas`, e o cliente não tem
+> nenhuma lista própria: ele apenas pergunta ao servidor e obedece.
+
 Alternative to the env var:
 
 ```bash
