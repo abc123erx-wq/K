@@ -1,0 +1,29 @@
+# ============================================================
+# Fly.io Deployment Configuration
+# Deploy: fly deploy
+# ============================================================
+
+app = "zomboid-web-server"
+primary_region = "gru" # São Paulo, change to your nearest region
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = false
+  auto_stop_machines = "off"
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 1000
+    soft_limit = 500
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1

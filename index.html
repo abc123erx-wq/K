@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no, maximum-scale=1.0, minimum-scale=1.0" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Day of the Undead" />
+    <meta name="theme-color" content="#0d0d0d" />
+    <meta name="format-detection" content="telephone=no" />
+    <meta name="description" content="Day of the Undead: jogo de sobrevivência zumbi em navegador. Mobile friendly, multiplayer online, PvP." />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%23111111'/%3E%3Ctext x='50' y='65' font-size='60' text-anchor='middle' fill='%23d96b3a'%3E🧟%3C/text%3E%3C/svg%3E" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E🧟%3C/text%3E%3C/svg%3E" />
+    <title>Day of the Undead</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500;600;700&family=Oswald:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      /* Safe-area insets for notched devices */
+      body {
+        padding-top: env(safe-area-inset-top);
+        padding-bottom: env(safe-area-inset-bottom);
+        padding-left: env(safe-area-inset-left);
+        padding-right: env(safe-area-inset-right);
+      }
+      /* Only prevent overscroll bounce (not full lock) */
+      html, body {
+        overscroll-behavior: none;
+        margin: 0;
+        padding: 0;
+      }
+      #root {
+        min-height: 100%;
+        -webkit-overflow-scrolling: touch;
+      }
+      /* Disable text selection during gameplay */
+      .game-touch-layer, canvas {
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+        user-select: none;
+      }
+      /* Fullscreen tap targets for mobile */
+      @media (hover: none) and (pointer: coarse) {
+        button { min-height: 36px; min-width: 36px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Hide address bar on iOS Safari
+      window.addEventListener("load", () => {
+        setTimeout(() => window.scrollTo(0, 1), 100);
+      });
+      // Disable double-tap zoom on iOS
+      let lastTouchEnd = 0;
+      document.addEventListener("touchend", (e) => {
+        const now = Date.now();
+        if (now - lastTouchEnd <= 300) e.preventDefault();
+        lastTouchEnd = now;
+      }, { passive: false });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "name": "zomboid-web-server",
+  "version": "1.0.0",
+  "description": "Zomboid Web - Multiplayer WebSocket Server",
+  "main": "ws-server.mjs",
+  "type": "module",
+  "scripts": {
+    "start": "node ws-server.mjs",
+    "dev": "node --watch ws-server.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
